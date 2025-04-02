@@ -1,86 +1,401 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
+<html lang="ja">
+<head>
     <meta charset="UTF-8">
-    <title>Adamski UFO</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>インタラクティブ UFO ビューア (コメント構文修正版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
-      body { margin: 0; background-color: black; }
-      canvas { display: block; }
+        /* 基本スタイル */
+        body {
+            font-family: 'Inter', sans-serif; /* フォント設定 */
+            margin: 0; /* デフォルトマージン削除 */
+            color: #f3f4f6; /* テキスト色 (ライトグレー) */
+            overscroll-behavior: none; /* スクロール連鎖を防止 (特にモバイル) */
+        }
+        #canvas-container {
+            min-height: 0; /* flexアイテムの縮小を許可 */
+            position: relative; /* 子要素の絶対配置の基準 */
+            touch-action: none; /* タッチ操作のデフォルト動作を無効化 (OrbitControls用) */
+        }
+        #canvas-container canvas {
+            display: block; /* canvas下の余白削除 */
+            width: 100%;   /* コンテナ幅に合わせる */
+            height: 100%;  /* コンテナ高に合わせる */
+        }
+        /* ボタンのスタイル */
+        .ufo-button {
+            transition: all 0.3s ease; /* ホバー効果のアニメーション */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2); /* ボタンの影 */
+            border-radius: 0.375rem; /* rounded-md */
+        }
+        .ufo-button:hover {
+            transform: translateY(-2px); /* ホバー時に少し浮き上がる */
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3); /* ホバー時の影を濃く */
+        }
+        /* アクティブなボタンのスタイル */
+        .ufo-button.active {
+            background-color: #4338ca; /* indigo-800 */
+            color: white;
+            font-weight: 600; /* semibold */
+        }
+        /* 解説表示エリアのスタイル */
+        #ufo-description {
+            border-top: 1px solid #4b5563; /* 境界線 (gray-600相当) */
+            margin-top: 0.75rem; /* mt-3相当 */
+            padding-top: 0.75rem; /* pt-3相当 */
+            max-height: 150px; /* 解説エリアの最大高さを設定 */
+            overflow-y: auto; /* 内容がはみ出た場合にスクロールバーを表示 */
+        }
+        #ufo-description h3 {
+            font-weight: bold;      /* 太字 */
+            margin-bottom: 0.25rem; /* mb-1相当 */
+            color: #9ca3af; /* gray-400相当 */
+        }
     </style>
-  </head>
-  <body>
-    <script type="module">
-      import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-      import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+</head>
+<body class="flex flex-col h-screen overflow-hidden bg-slate-900">
 
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(0, 2, 6);
+    <div id="ui-panel" class="order-first w-full p-3 bg-gray-800 bg-opacity-90 shadow-lg z-10
+                           md:absolute md:top-4 md:right-4 md:w-auto md:max-w-xs md:order-none md:rounded-lg md:bg-opacity-80 md:p-4">
+        <h1 class="text-lg md:text-xl font-bold mb-2">UFO ビューア</h1>
+        <p class="text-xs md:text-sm mb-3 md:mb-4">マウス/タッチ操作: ドラッグ=回転, スクロール/ピンチ=ズーム, 右クリック/2本指ドラッグ=平行移動</p>
+        <div class="grid grid-cols-3 gap-2 md:grid-cols-2 md:gap-2" id="ufo-buttons">
+            </div>
+        <div id="ufo-description" class="text-xs md:text-sm mt-3 pt-3 border-t border-gray-600">
+            <p class="text-gray-400">形状ボタンを選択すると、解説が表示されます。</p>
+        </div>
+         <p id="error-message" class="text-red-500 mt-2 text-sm"></p>
+    </div>
 
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      document.body.appendChild(renderer.domElement);
+    <div id="canvas-container" class="flex-grow w-full z-0">
+        </div>
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-      scene.add(ambientLight);
-      const pointLight = new THREE.PointLight(0xffffff, 1);
-      pointLight.position.set(5, 10, 5);
-      scene.add(pointLight);
 
-      const ufoGroup = new THREE.Group();
-      const material = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.7, roughness: 0.3 });
+    <script>
+        // --- グローバル変数 ---
+        let scene, camera, renderer, controls;
+        let currentUFO = null; // 現在表示中のUFOオブジェクト
+        let canvasContainer, buttonsContainer, errorMessageElement, descriptionElement; // DOM要素への参照
 
-      const mainDisk = new THREE.Mesh(
-        new THREE.CylinderGeometry(2, 2.5, 0.6, 64),
-        material
-      );
-      ufoGroup.add(mainDisk);
+        // --- 利用可能なUFOタイプと生成関数のマッピング ---
+        const ufoTypes = {
+            '円盤型': createSaucer,
+            '葉巻型': createCigar,
+            '三角形': createTriangle,
+            '球体型': createSphere,
+            '立方体型': createCube,
+            'トーラス型': createTorus
+        };
 
-      const topDome = new THREE.Mesh(
-        new THREE.SphereGeometry(1.2, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2),
-        material
-      );
-      topDome.position.y = 0.3;
-      ufoGroup.add(topDome);
+        // --- UFOの解説データ (変更なし) ---
+        const ufoDescriptions = {
+            '円盤型': {
+                description: "最も古典的なUFOの形状。皿を伏せたような形や、レンズ状、ドームを持つものなど様々。",
+                examples: "目撃例: 1947年のケネス・アーノルド事件以降、「空飛ぶ円盤 (Flying Saucer)」として広く知られるように。ロズウェル事件など、多くの有名な事件で連想される形状です。"
+            },
+            '葉巻型': {
+                description: "細長い円筒形、または葉巻のような形状。巨大な「母船」として描写されることもあります。",
+                examples: "目撃例: 1950年代から報告例があり、ゆっくりと飛行する巨大物体として目撃されることが多いです。近年では、観測された恒星間天体オウムアムアがこの形状に似ていると話題になりました（ただし自然物とされています）。"
+            },
+            '三角形': {
+                description: "多くの場合、黒色で巨大な正三角形または鈍角三角形の形状。しばしば無音で低空を飛行するとされます。",
+                examples: "目撃例: 1989-90年のベルギーUFOウェーブや、1997年のフェニックス・ライツ事件などが有名です。底面に複数のライトを持つことが多いとされます。"
+            },
+            '球体型': {
+                description: "単純な球形、または光球（オーブ）として目撃されます。金属的な質感を持つものや、発光するものなど様々です。",
+                examples: "目撃例: 第二次世界大戦中の「フー・ファイター」と呼ばれる謎の発光体や、近年公開された軍によるUAP（未確認航空現象）映像にも球形の物体が含まれています。"
+            },
+            '立方体型': {
+                description: "立方体または直方体の形状。角張った、人工的な印象を与えます。",
+                examples: "目撃例: 古典的な目撃例は少ないですが、SF作品（スタートレックのボーグキューブ等）の影響や、近年のUAP報告で言及されることがあります。非常に珍しい形状とされます。"
+            },
+            'トーラス型': {
+                description: "ドーナツのような、中央に穴の空いた円環状の形状。",
+                examples: "目撃例: UFOの形状としては比較的珍しいですが、幾何学的で特徴的なため、SFやアートでモチーフとされることがあります。光輪やリング状の発光現象として報告される例も稀にあります。"
+            }
+        };
 
-      const bottomDome = new THREE.Mesh(
-        new THREE.SphereGeometry(1.8, 32, 32, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
-        material
-      );
-      bottomDome.position.y = -0.3;
-      ufoGroup.add(bottomDome);
+        // --- DOM読み込み完了後に初期化処理を実行 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log("DOM content loaded.");
+            canvasContainer = document.getElementById('canvas-container');
+            buttonsContainer = document.getElementById('ufo-buttons');
+            errorMessageElement = document.getElementById('error-message');
+            descriptionElement = document.getElementById('ufo-description');
 
-      const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x003366 });
-      for (let i = 0; i < 12; i++) {
-        const angle = (i / 12) * Math.PI * 2;
-        const x = Math.cos(angle) * 1.8;
-        const z = Math.sin(angle) * 1.8;
-        const windowMesh = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.1, 0.1, 0.05, 16),
-          windowMaterial
-        );
-        windowMesh.rotation.x = Math.PI / 2;
-        windowMesh.position.set(x, 0.15, z);
-        ufoGroup.add(windowMesh);
-      }
+            if (!canvasContainer || !buttonsContainer || !errorMessageElement || !descriptionElement) {
+                console.error("Required HTML elements not found!");
+                if (errorMessageElement) {
+                    errorMessageElement.textContent = "ページの初期化に失敗しました。必要なHTML要素が見つかりません。";
+                } else {
+                    alert("ページの初期化に失敗しました。必要なHTML要素が見つかりません。");
+                }
+                return;
+            }
+            if (typeof THREE === 'undefined' || typeof THREE.OrbitControls === 'undefined') {
+                console.error("THREE.js or OrbitControls library is not loaded.");
+                errorMessageElement.textContent = "3Dライブラリの読み込みに失敗しました。ネットワーク接続を確認するか、ページを再読み込みしてください。";
+                return;
+            }
+            console.log("THREE.js and OrbitControls loaded.");
+            init();
+        });
 
-      scene.add(ufoGroup);
+        // --- Three.js 初期化関数 ---
+        function init() {
+            console.log("Initializing scene...");
+            try {
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x334155); // 背景色 (slate-700)
 
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
+                const initialWidth = canvasContainer.clientWidth || window.innerWidth;
+                const initialHeight = canvasContainer.clientHeight || window.innerHeight;
+                camera = new THREE.PerspectiveCamera(60, initialWidth / initialHeight, 0.1, 1000);
+                camera.position.set(0, 1, 5);
 
-      function animate() {
-        requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
-      }
-      animate();
+                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                canvasContainer.appendChild(renderer.domElement);
+                console.log("Renderer created.");
 
-      window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-      });
+                const ambientLight = new THREE.AmbientLight(0xcccccc, 1.1); // 環境光強度調整
+                scene.add(ambientLight);
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+                directionalLight.position.set(1, 1.5, 1).normalize();
+                scene.add(directionalLight);
+                console.log("Lights added.");
+
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = false;
+                controls.minDistance = 1;
+                controls.maxDistance = 30;
+                console.log("OrbitControls initialized.");
+
+                buttonsContainer.innerHTML = '';
+                Object.keys(ufoTypes).forEach((name, index) => {
+                    const button = document.createElement('button');
+                    button.textContent = name;
+                    button.dataset.ufoName = name;
+                    button.className = 'ufo-button w-full px-2 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs';
+                    button.onclick = () => switchUFO(name);
+                    buttonsContainer.appendChild(button);
+                    if (index === 0) {
+                        setTimeout(() => switchUFO(name), 100);
+                    }
+                });
+                console.log("UI buttons created.");
+
+                window.addEventListener('resize', onWindowResize, false);
+                onWindowResize();
+                animate();
+                console.log("Initialization complete.");
+
+            } catch (error) {
+                console.error("Error during initialization:", error);
+                errorMessageElement.textContent = `初期化中にエラーが発生しました: ${error.message}`;
+            }
+        }
+
+        // --- UFO形状生成関数 ---
+
+        function createSaucer() {
+            const group = new THREE.Group();
+            const bodyGeometry = new THREE.CylinderGeometry(1.5, 1.5, 0.3, 32);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.3 });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            group.add(body);
+            const domeGeometry = new THREE.SphereGeometry(0.8, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+            const domeMaterial = new THREE.MeshStandardMaterial({ color: 0x7777cc, transparent: true, opacity: 0.6 });
+            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
+            dome.position.y = 0.15;
+            group.add(dome);
+            return group;
+        }
+
+        function createCigar() {
+            const group = new THREE.Group();
+            const length = 3; const radius = 0.5;
+            const material = new THREE.MeshStandardMaterial({ color: 0x8b4513, metalness: 0.5, roughness: 0.6 });
+            const cylinderGeometry = new THREE.CylinderGeometry(radius, radius, length, 32);
+            const cylinder = new THREE.Mesh(cylinderGeometry, material);
+            group.add(cylinder);
+            const sphereGeometry = new THREE.SphereGeometry(radius, 32, 16);
+            const sphere1 = new THREE.Mesh(sphereGeometry, material);
+            sphere1.position.y = length / 2; group.add(sphere1);
+            const sphere2 = new THREE.Mesh(sphereGeometry, material);
+            sphere2.position.y = -length / 2; group.add(sphere2);
+            group.rotation.z = Math.PI / 2;
+            return group;
+        }
+
+        function createTriangle() {
+            const shape = new THREE.Shape();
+            const size = 2;
+            shape.moveTo(0, size * Math.sqrt(3) / 3);
+            shape.lineTo(-size / 2, -size * Math.sqrt(3) / 6);
+            shape.lineTo(size / 2, -size * Math.sqrt(3) / 6);
+            shape.lineTo(0, size * Math.sqrt(3) / 3);
+            const extrudeSettings = { steps: 1, depth: 0.2, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelOffset: 0, bevelSegments: 3 };
+            const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x888888,
+                metalness: 0.6,
+                roughness: 0.4
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.position.y = -0.1;
+            return mesh;
+        }
+
+        function createSphere() {
+            const geometry = new THREE.SphereGeometry(1.2, 32, 32);
+            const material = new THREE.MeshStandardMaterial({
+                 color: 0xffffff, metalness: 0.1, roughness: 0.1,
+                 transparent: true, opacity: 0.8,
+                 emissive: 0xaaaaaa, emissiveIntensity: 0.3
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            return mesh;
+        }
+
+        function createCube() {
+            const geometry = new THREE.BoxGeometry(1.8, 1.8, 1.8);
+            const material = new THREE.MeshStandardMaterial({ color: 0x777788, metalness: 0.9, roughness: 0.4 });
+            const mesh = new THREE.Mesh(geometry, material);
+            return mesh;
+        }
+
+        function createTorus() {
+            const geometry = new THREE.TorusGeometry(1.5, 0.5, 24, 100);
+            const material = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.8, roughness: 0.3 });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.rotation.x = Math.PI / 4;
+            return mesh;
+        }
+
+        // --- UFO切り替え関数 (変更なし) ---
+        function switchUFO(ufoKey) {
+            console.log("Switching UFO to:", ufoKey);
+            errorMessageElement.textContent = '';
+
+            if (currentUFO) {
+                scene.remove(currentUFO);
+                disposeNode(currentUFO);
+                currentUFO = null;
+            }
+
+            const createFunction = ufoTypes[ufoKey];
+            if (createFunction) {
+                try {
+                    currentUFO = createFunction();
+                    scene.add(currentUFO);
+                    console.log(ufoKey, "added to scene.");
+                } catch(error) {
+                     console.error("Error creating UFO:", ufoKey, error);
+                     errorMessageElement.textContent = `UFOモデル(${ufoKey})の作成中にエラーが発生しました。`;
+                     currentUFO = null;
+                }
+            } else {
+                console.error("Unknown UFO type key:", ufoKey);
+                errorMessageElement.textContent = `不明なUFOタイプです: ${ufoKey}`;
+            }
+
+            const info = ufoDescriptions[ufoKey];
+            if (info && descriptionElement) {
+                descriptionElement.innerHTML = `
+                    <h3>形状の特徴</h3>
+                    <p class="mb-2">${info.description || '解説はありません。'}</p>
+                    <h3>関連情報・目撃例</h3>
+                    <p>${info.examples || '関連情報はありません。'}</p>
+                `;
+                descriptionElement.scrollTop = 0;
+            } else if (descriptionElement) {
+                descriptionElement.innerHTML = '<p class="text-gray-400">この形状に関する解説はありません。</p>';
+            }
+
+            const buttons = buttonsContainer.querySelectorAll('button');
+            buttons.forEach(btn => {
+                if (btn.dataset.ufoName === ufoKey) {
+                    btn.classList.add('active', 'bg-indigo-800');
+                    btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                } else {
+                    btn.classList.remove('active', 'bg-indigo-800');
+                    btn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+                }
+            });
+        }
+
+        // --- リソース解放ヘルパー関数 (変更なし) ---
+        function disposeNode(node) {
+            if (node instanceof THREE.Mesh) {
+                if (node.geometry) {
+                    node.geometry.dispose();
+                }
+                if (node.material) {
+                    if (Array.isArray(node.material)) {
+                        node.material.forEach(material => disposeMaterial(material));
+                    } else {
+                        disposeMaterial(node.material);
+                    }
+                }
+            } else if (node instanceof THREE.Group) {
+                node.children.forEach(child => disposeNode(child));
+            }
+        }
+        function disposeMaterial(material) {
+            material.dispose();
+        }
+
+        // --- ウィンドウリサイズ処理 (変更なし) ---
+        function onWindowResize() {
+            if (!camera || !renderer || !canvasContainer) {
+                console.warn("Resize called before elements are ready.");
+                return;
+            }
+            const width = canvasContainer.clientWidth;
+            const height = canvasContainer.clientHeight;
+
+            if (width === 0 || height === 0) {
+                console.warn("Canvas container dimensions are zero. Skipping resize.");
+                return;
+            }
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+            console.log("Resized renderer to:", width, "x", height);
+        }
+
+        // --- アニメーションループ (変更なし) ---
+        function animate() {
+            requestAnimationFrame(animate);
+            if (!controls || !renderer || !scene || !camera) { return; }
+
+            controls.update();
+
+            if (currentUFO) {
+                 currentUFO.rotation.y += 0.005;
+                 if (currentUFO.children.length === 0 &&
+                     (currentUFO.geometry instanceof THREE.BoxGeometry || currentUFO.geometry instanceof THREE.TorusGeometry)) {
+                     currentUFO.rotation.x += 0.002;
+                 } else if (currentUFO instanceof THREE.Group && currentUFO.children.length > 0 && currentUFO.children[0].geometry instanceof THREE.CylinderGeometry) {
+                     // Example: Cigar shape specific rotation if needed
+                 }
+            }
+
+            renderer.render(scene, camera);
+        }
+
     </script>
-  </body>
+
+    </body>
 </html>
